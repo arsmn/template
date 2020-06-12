@@ -3,17 +3,20 @@ package html
 import (
 	"html/template"
 	"io"
-	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gofiber/template/utils"
 )
 
 // Engine struct
 type Engine struct {
-	directory string
-	extension string
+	directory  string
+	extension  string
+	fileSystem http.FileSystem
 
 	Templates *template.Template
 }
@@ -34,10 +37,26 @@ func New(directory, extension string, funcmap ...map[string]interface{}) *Engine
 	return engine
 }
 
+func NewEmbedded(fileSystem http.FileSystem, extension string, funcmap ...map[string]interface{}) *Engine {
+	engine := &Engine{
+		fileSystem: fileSystem,
+		extension:  extension,
+		directory:  "/",
+		Templates:  template.New(""),
+	}
+	if len(funcmap) > 0 {
+		engine.Templates.Funcs(funcmap[0])
+	}
+	if err := engine.Parse(); err != nil {
+		log.Fatalf("html.NewEmbedded(): %v", err)
+	}
+	return engine
+}
+
 // Parse parses the templates to the engine.
-func (e *Engine) Parse() error {
+func (e *Engine) Parse() (err error) {
 	// Loop trough each directory and register template files
-	err := filepath.Walk(e.directory, func(path string, info os.FileInfo, err error) error {
+	walkFn := func(path string, info os.FileInfo, err error) error {
 		// Return error if exist
 		if err != nil {
 			return err
@@ -65,7 +84,7 @@ func (e *Engine) Parse() error {
 		name = strings.Replace(name, e.extension, "", -1)
 		// Read the file
 		// #gosec G304
-		buf, err := ioutil.ReadFile(path)
+		buf, err := utils.ReadFile(path, e.fileSystem)
 		if err != nil {
 			return err
 		}
@@ -78,8 +97,14 @@ func (e *Engine) Parse() error {
 		// Debugging
 		//fmt.Printf("[Engine] Registered view: %s\n", name)
 		return err
-	})
-	return err
+	}
+
+	if e.fileSystem != nil {
+		err = utils.Walk(e.fileSystem, e.directory, walkFn)
+	} else {
+		err = filepath.Walk(e.directory, walkFn)
+	}
+	return
 }
 
 // Execute will render the template by name
